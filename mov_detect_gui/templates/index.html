@@ -1,0 +1,35 @@
+<html>
+<head>
+    <title></title>
+</head>
+<body>
+<h1>Telegram NVR</h1>
+<img id="motionjpeg" style="width: 90%; margin-left: 5%;"  src="{{ url_for('video_feed') }}">
+<script src="//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
+
+<script >
+    function motionjpeg(id) {
+        var image = $(id), src;
+
+        if (!image.length) return;
+
+        src = image.attr("src");
+        if (src.indexOf("?") < 0) {
+            image.attr("src", src + "?"); // must have querystring
+        }
+
+        image.on("load", function() {
+            // this cause the load event to be called "recursively"
+            this.src = this.src.replace(/\?[^\n]*$/, "?") +
+                (new Date()).getTime(); // 'this' refers to the image
+        });
+    }
+
+
+    $(document).ready(function() {
+        motionjpeg("#motionjpeg"); // Use the function on the image
+    });
+</script>
+</body>
+</html>
+
