@@ -35,6 +35,8 @@ class SingleMotionDetector:
 		cv2.accumulateWeighted(image, self.bg, self.accumWeight)
 		
 	def detect(self, image, tVal=25):
+		if self.bg is None:
+			return None
 		# compute the absolute difference between the background model
 		# and the image passed in, then threshold the delta image
 		delta = cv2.absdiff(self.bg.astype("uint8"), image)
@@ -99,6 +101,9 @@ outputVideo=None
 wname="/tmp/video.avi"
 sname="/tmp/video.mp4"
 isStopped=False
+video_record_lag=27*2 # ~2 sec
+min_bright_that_no_move=5 # min bright when stop record video
+
 def updateMaxBright(b):
 	global bright  
 	if b>bright:
@@ -124,7 +129,7 @@ def stopWriteVideo():
 	if writing==False or isStopped==True: return
 	outputVideo.release()
 	needInitVideo=True
-	writing==False 
+	writing=False 
 	if bright>=minBright: 
 		print "SEND min bright from config {} cur bright {}".format(minBright,bright)
 		try:
@@ -132,7 +137,7 @@ def stopWriteVideo():
 			os.system(cmd)  
 			files = {'video': open(sname,'rb')}
 			url='https://api.telegram.org/bot'+token+'/sendVideo?chat_id='+chat_id
-			r = requests.post(url, files=files)
+			requests.post(url, files=files)
 			os.remove(sname)		
 		except:
 			print "send file"	
@@ -154,7 +159,7 @@ def detect_motion(frameCount):
 	# initialize the motion detector and the total number of frames
 	# read thus far
 	md = SingleMotionDetector(accumWeight=0.1)
-	total = 0
+	# total = 0
 	novideo_count=0
 	# loop over frames from the video stream
 	move=False
@@ -185,29 +190,39 @@ def detect_motion(frameCount):
 		# number to construct a reasonable background model, then
 		# continue to process the frame
 # 		writeVideo(frame)
-		if total > frameCount:
-			# detect motion in the image
-			motion = md.detect(gray)
-			# check to see if motion was found in the frame
-			if motion is not None:
-				# unpack the tuple and draw the box surrounding the
-				# "motion area" on the output frame
-				(thresh, (minX, minY, maxX, maxY)) = motion
-				cv2.rectangle(frame, (minX, minY), (maxX, maxY),
-					(0, 0, 255), 2)
-				writeVideo(frame)
-				move=True
-				novideo_count=0
-			else: move=False
+		motion = md.detect(gray)
+# 		if total > frameCount:
+		# detect motion in the image
+		# check to see if motion was found in the frame
+		if motion is not None:
+			# unpack the tuple and draw the box surrounding the
+			# "motion area" on the output frame
+			novideo_count=0
+			move=True
+		else: 
+			novideo_count=novideo_count+1
+
+		md.update(gray)
 		
-		if	move==False:novideo_count=novideo_count+1
-		if move==False and novideo_count>50:
+		if motion is not None:
+			(thresh, (minX, minY, maxX, maxY)) = motion
+			cv2.rectangle(frame, (minX, minY), (maxX, maxY),
+						  (0, 0, 255), 2)
+			
+		if move and bright>min_bright_that_no_move:
+			writeVideo(frame)
+		
+		if bright<=min_bright_that_no_move and move:
+			novideo_count=video_record_lag #if we have a movement but bright is lower than light is turn off - stop record and sends
+		
+		if novideo_count>=video_record_lag:
+			move=False
 			stopWriteVideo()	
 		
+			
 		# update the background model and increment the total number
 		# of frames read thus far
-		md.update(gray)
-		total += 1
+		# total += 1
 		# acquire the lock, set the output frame, and release the
 		# lock
 		with lock:
