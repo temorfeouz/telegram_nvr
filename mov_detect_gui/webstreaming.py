@@ -3,7 +3,9 @@
 
 # import the necessary packages
 # from motion_detection import SingleMotionDetector
-from imutils.video import VideoStream
+# from imutils.video import VideoStream
+from imutils.video import WebcamVideoStream
+from imutils.object_detection import non_max_suppression
 from flask import Response
 from flask import Flask
 from flask import render_template
@@ -17,6 +19,44 @@ import os
 import requests
 import numpy as np
 import imutils
+import urllib2
+
+
+
+class FPS:
+	def __init__(self):
+		# store the start time, end time, and total number of frames
+		# that were examined between the start and end intervals
+		self._start = None
+		self._end = None
+		self._numFrames = 0
+
+	def start(self):
+		# start the timer
+		self._start = datetime.datetime.now()
+		return self
+
+	def stop(self):
+		# stop the timer
+		self._end = datetime.datetime.now()
+
+	def update(self):
+		# increment the total number of frames examined during the
+		# start and end intervals
+		self._numFrames += 1
+
+	def elapsed(self):
+		# return the total number of seconds between the start and
+		# end interval
+		if self._end is None or self._start is None:return 0
+
+		return (self._end - self._start).total_seconds()
+
+	def fps(self):
+		# compute the (approximate) frames per second
+		return self._numFrames / self.elapsed()
+
+
 
 class SingleMotionDetector:
 	def __init__(self, accumWeight=0.5):
@@ -84,7 +124,7 @@ def index():
 	
 def initStream():
 	global vs
-	vs = VideoStream(streamURL).start()
+	vs = WebcamVideoStream(streamURL).start()
 	time.sleep(.2)
 	
 # record and send video vars
@@ -101,20 +141,20 @@ outputVideo=None
 wname="/tmp/video.avi"
 sname="/tmp/video.mp4"
 isStopped=False
-video_record_lag=27*2 # ~2 sec
+video_record_lag=5*2 # ~2 sec
 min_bright_that_no_move=5 # min bright when stop record video
 
 def updateMaxBright(b):
 	global bright  
 	if b>bright:
-		print "new max bright {}".format(b)
+		print("new max bright {}".format(b))
 		bright=b
 def writeVideo(frame):
 	global outputVideo,writing,needInitVideo,frame_count,fname,isStopped
 	(h, w) = (None, None)
 	(h, w) = frame.shape[:2]
 	if needInitVideo:
-		print "start write video"
+		print ("start write video")
 		needInitVideo=False
 		timestamp = datetime.datetime.now()
 		fourcc=cv2.cv.CV_FOURCC(*'DIVX')	
@@ -123,6 +163,50 @@ def writeVideo(frame):
 	outputVideo.write(frame)
 	writing=True
 	isStopped=False
+	
+def isHumanPresent(file):
+	cap = cv2.VideoCapture(file)
+	fps = cap.get(5)
+	frame_count = cap.get(7)
+	duration = frame_count/fps
+	
+	if duration <=4.9:# to short video
+		print("video too short - "+str(duration)+" but want "+str(4*60))
+		cap.release()
+		return False
+	else:
+		print("video len is not too short - "+str(duration))
+		# get = urllib2.urlopen('https://api.telegram.org/bot'+token+'/sendMessage?chat_id='+chat_id+'&text=video_duration:'+str(duration))
+		cap.release()
+		return True
+	
+	# too slow!
+	fps_person_detect=FPS()
+	# Read until video is completed
+	while(cap.isOpened()):
+		# Capture frame-by-frame
+		ret, frame = cap.read()
+		if ret:
+			fps_person_detect.start()
+			
+			# detect people in the image
+			# returns the bounding boxes for the detected objects
+			boxes, weights = hog.detectMultiScale(frame, winStride=(8,8),padding=(8, 8), scale=1.1)
+			boxes = np.array([[x, y, x + w, y + h] for (x, y, w, h) in boxes])
+			pick = non_max_suppression(boxes, probs=None, overlapThresh=0.65)
+			
+			fps_person_detect.stop()
+			print ("[DEBUG] person detect duration {:.2f}s".format(fps_person_detect.elapsed()))
+			if len(pick)>0:
+				print("find human!")
+				cap.release()
+				return True
+		else:
+			break
+	
+	cap.release()
+	print("human not found(")
+	return False
 
 def stopWriteVideo():
 	global outputVideo,writing,needInitVideo,frame_count,wname,sname,isStopped,minBright,bright
@@ -131,6 +215,15 @@ def stopWriteVideo():
 	needInitVideo=True
 	writing=False 
 	if bright>=minBright: 
+		if not isHumanPresent(wname):
+			try:
+				os.remove(wname)
+				isStopped=True
+				bright=0
+			except:
+				print ("err remove file")
+			return 
+			
 		print "SEND min bright from config {} cur bright {}".format(minBright,bright)
 		try:
 			cmd='ffmpeg -i '+wname+' -c:v copy -c:a copy -y '+sname
@@ -150,7 +243,7 @@ def stopWriteVideo():
 		isStopped=True
 		bright=0
 	except:
-	    print "err remove file"
+	    print ("err remove file")
 	
 def detect_motion(frameCount):
 	# grab global references to the video stream, output frame, and
@@ -163,15 +256,29 @@ def detect_motion(frameCount):
 	novideo_count=0
 	# loop over frames from the video stream
 	move=False
+	fps=FPS()
+	fps_read_frame=FPS()
+	fps_prepare = FPS()
+	fps_detect = FPS()
+	fps_draw=FPS()
+	fps_write_file=FPS()
+	fps_update_background=FPS()
+	fps_person_detect=FPS()
+	
 	while True:
 		# read the next frame from the video stream, resize it,
 		# convert the frame to grayscale, and blur it
+		fps_read_frame.start()
+		fps.start()
 		frame = vs.read()
+		fps_read_frame.stop()
+		
 		if frame is None:
-			print "empty frame, skip"
+			print ("empty frame, skip")
 			initStream()
 			continue
 
+		fps_prepare.start()
 # 		cv2.imwrite("test.jpg", frame)
 		frame = imutils.resize(frame, width=500)
 		gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -185,12 +292,29 @@ def detect_motion(frameCount):
 		updateMaxBright(bright)
 		cv2.putText(frame,"{}".format(bright) , (10, frame.shape[0] - 10),
 			cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
-			
+
+		fps_prepare.stop()	
+
+		# fps_person_detect.start()
+		# # detect people in the image
+		# # returns the bounding boxes for the detected objects
+		# boxes, weights = hog.detectMultiScale(gray, winStride=(16,16) ,scale=1.2)
+		# boxes = np.array([[x, y, x + w, y + h] for (x, y, w, h) in boxes])
+		# pick = non_max_suppression(boxes, probs=None, overlapThresh=0.65)
+		# for (xA, yA, xB, yB) in pick:
+		# 	# display the detected boxes in the colour picture
+		# 	cv2.rectangle(frame, (xA, yA), (xB, yB),
+		# 				  (0, 255, 0), 2)
+		# fps_person_detect.stop()
+		
 		# if the total number of frames has reached a sufficient
 		# number to construct a reasonable background model, then
 		# continue to process the frame
 # 		writeVideo(frame)
+		fps_detect.start()
 		motion = md.detect(gray)
+		fps_detect.stop()
+		
 # 		if total > frameCount:
 		# detect motion in the image
 		# check to see if motion was found in the frame
@@ -199,18 +323,26 @@ def detect_motion(frameCount):
 			# "motion area" on the output frame
 			novideo_count=0
 			move=True
+
+
+
+
+			fps_draw.start()
+			(thresh, (minX, minY, maxX, maxY)) = motion
+			cv2.rectangle(frame, (minX, minY), (maxX, maxY),
+			  (0, 0, 255), 2)
+			fps_draw.stop()
+
+			fps_write_file.start()
+			writeVideo(frame)
+			fps_write_file.stop()
 		else: 
 			novideo_count=novideo_count+1
 
+		fps_update_background.start()
 		md.update(gray)
-		
-		if motion is not None:
-			(thresh, (minX, minY, maxX, maxY)) = motion
-			cv2.rectangle(frame, (minX, minY), (maxX, maxY),
-						  (0, 0, 255), 2)
-			
-		if move and bright>min_bright_that_no_move:
-			writeVideo(frame)
+		fps_update_background.stop()
+		fps.stop()			
 		
 		if bright<=min_bright_that_no_move and move:
 			novideo_count=video_record_lag #if we have a movement but bright is lower than light is turn off - stop record and sends
@@ -218,8 +350,17 @@ def detect_motion(frameCount):
 		if novideo_count>=video_record_lag:
 			move=False
 			stopWriteVideo()	
-		
 			
+		# print ("[DEBUG] TOTAL FRAME DURATION {:.2f}, read frame {:.2f}, prepare frame {:.2f}, detection {:.2f}, draw rect {:.2f}, write to file {:.2f}, update background {:.2f}, person detect {:.2f}".format(
+		# 	fps.elapsed(),
+		# 	fps_read_frame.elapsed(),
+		# 	fps_prepare.elapsed(),
+		# 	fps_detect.elapsed(),
+		# 	fps_draw.elapsed(),
+		# 	fps_write_file.elapsed(),
+		# 	fps_update_background.elapsed(),
+		# 	fps_person_detect.elapsed(),
+		# ))
 		# update the background model and increment the total number
 		# of frames read thus far
 		# total += 1
@@ -259,6 +400,10 @@ def video_feed():
 		
 # check to see if this is the main thread of execution
 if __name__ == '__main__':
+	# initialize the HOG descriptor/person detector
+	hog = cv2.HOGDescriptor()
+	hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+	 
 	# construct the argument parser and parse command line arguments
 	ap = argparse.ArgumentParser()
 	ap.add_argument("-i", "--ip", type=str, required=True,
@@ -280,6 +425,8 @@ if __name__ == '__main__':
 	token=args["telegram_token"]
 	chat_id=args["telegram_chat"]
 	streamURL=args["stream"]
+
+	# isHumanPresent("video.mp4")
 	
 	initStream()
 	
@@ -295,8 +442,6 @@ if __name__ == '__main__':
 		threaded=True, use_reloader=False)
 # release the video stream pointer
 vs.stop()
-
-
 
 
 
