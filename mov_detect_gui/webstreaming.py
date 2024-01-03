@@ -19,7 +19,7 @@ import os
 import requests
 import numpy as np
 import imutils
-import urllib2
+import urllib.request
 
 
 class FPS:
@@ -162,7 +162,7 @@ def writeVideo(frame):
         print("start write video")
         needInitVideo = False
         timestamp = datetime.datetime.now()
-        fourcc = cv2.cv.CV_FOURCC(*'DIVX')
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         outputVideo = cv2.VideoWriter(wname, fourcc, 5, (w, h), True)
 
     outputVideo.write(frame)
@@ -182,7 +182,7 @@ def isHumanPresent(file):
         return False
     else:
         print("video len is not too short - " + str(duration))
-        # get = urllib2.urlopen('https://api.telegram.org/bot'+token+'/sendMessage?chat_id='+chat_id+'&text=video_duration:'+str(duration))
+        # get = urllib.request.urlopen('https://api.telegram.org/bot'+token+'/sendMessage?chat_id='+chat_id+'&text=video_duration:'+str(duration))
         cap.release()
         return True
 
@@ -233,7 +233,8 @@ def stopWriteVideo():
 
         print("SEND min bright from config {} cur bright {}".format(minBright, bright))
         try:
-            cmd = 'ffmpeg -i ' + wname + ' -c:v copy -c:a copy -y ' + sname
+            #cmd = 'ffmpeg -i ' + wname + ' -c:v copy -c:a copy -y ' + sname
+            cmd = 'ffmpeg -i ' + wname + ' -c:v libx264 -profile:v baseline -c:a aac -ar 44100 -ac 2 -b:a 128k -vf format=yuv420p ' + sname
             os.system(cmd)
             files = {'video': open(sname, 'rb')}
             url = 'https://api.telegram.org/bot' + token + '/sendVideo?chat_id=' + chat_id
