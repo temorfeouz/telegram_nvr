@@ -234,7 +234,7 @@ def stopWriteVideo():
         print("SEND min bright from config {} cur bright {}".format(minBright, bright))
         try:
             #cmd = 'ffmpeg -i ' + wname + ' -c:v copy -c:a copy -y ' + sname
-            cmd = 'ffmpeg -i ' + wname + ' -c:v libx264 -profile:v baseline -c:a aac -ar 44100 -ac 2 -b:a 128k -vf format=yuv420p ' + sname
+            cmd = 'ffmpeg -i ' + wname + ' -c:v libx264 -profile:v baseline -c:a aac -ar 44100 -ac 2 -b:a 128k -vf format=yuv420p -y ' + sname
             os.system(cmd)
             files = {'video': open(sname, 'rb')}
             url = 'https://api.telegram.org/bot' + token + '/sendVideo?chat_id=' + chat_id
